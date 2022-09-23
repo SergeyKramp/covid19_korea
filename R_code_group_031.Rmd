@@ -1,0 +1,268 @@
+---
+title: "Group 31"
+output: pdf_document
+---
+
+## Used Libraries
+```{r echo=T, message = F}
+library(tidyverse)
+library(data.table)
+```
+
+## Loaded Data
+```{r}
+floating <- fread("SeoulFloating.csv")
+TimeProvince <- fread("TimeProvince.csv")
+patient <- fread("PatientInfo.csv")
+policy <- fread("Policy.csv")
+J.cases <- fread("TimeProvince.csv")
+
+```
+
+
+## External Data#
+```{r}
+pop <- fread("population_by_region.csv")
+J.pop <- fread("population_by_region.csv")
+#Source: https://www.citypopulation.de/en/southkorea/admin/
+
+capitals <- fread("Capitalcities.csv", header = FALSE)
+#Source: https://en.wikipedia.org/wiki/List_of_capitals_in_South_Korea
+
+J.distances <- fread("KR.csv", header = TRUE)
+#Source: https://www.mileage-charts.com/chart.php?p=index&a=AS&b=KR
+```
+
+In the first claim we explore the influence of the floating population size in Seoul on the amount new daily cases, as a case study for the rest of the country.
+
+## Figures 1-3
+```{r echo= T, message = FALSE, fig.show= 'hide', results='hide',  warning= FALSE}
+#Remove outliers from floating population data
+floating <- floating[, .(floating_per_day =sum(fp_num)/10^07),by= date]
+floating_wo_outlier <- floating[floating_per_day %between% c(17.5,22.5)] 
+
+#Create median weekly floating population data table by using loop
+i <- 1
+s <- as.Date("2020-01-01")
+e <- as.Date("2020-01-08")
+weekly_median_dt <- data.table(week = as.Date(rep("2020-01-01",52)), 
+                               median_floating_population = rep(0,52))
+
+                                
+while(s <= as.Date("2020-05-31")){
+  weekly_median_dt[i,2] <- floating_wo_outlier[date %between% c(s,e)][,median(floating_per_day)]
+  weekly_median_dt[i,1] <- s
+  i<- i+1
+  s<- s+7
+  e<- e+7
+}
+weekly_median_dt <- weekly_median_dt[1:22]
+
+#plot
+figure_1 <- ggplot(weekly_median_dt, aes(x=week, y=median_floating_population)) +
+  geom_line() + xlab("Week") + ylab("Median Weekly Population (in millions)") 
+
+
+
+# Create new daily cases
+TimeProvince[, new_cases_per_day := c(0,diff(confirmed)), by = province]
+new_daily_cases <- TimeProvince[province == "Seoul"]
+
+# Create median weekly new cases by using loop
+i <- 1
+s <- as.Date("2020-01-22")
+e <- as.Date("2020-01-29")
+shifted_median_weekly_cases_dt <- data.table(week = as.Date(rep("2020-01-01",52)), 
+                                              median_weekly_cases = rep(0,52))
+
+while(s <= as.Date("2020-05-31")){
+  shifted_median_weekly_cases_dt[i,2] <- new_daily_cases[date %between% c(s,e)][,median(new_cases_per_day)]
+  shifted_median_weekly_cases_dt[i,1] <- s
+  i<- i+1
+  s<- s+7
+  e<- e+7
+}
+
+# Shift the cases by two weeks
+j <- 1
+while(j <=20){
+shifted_median_weekly_cases_dt[j,2] <- shifted_median_weekly_cases_dt[j+2,2]
+j <- j+1
+}
+
+shifted_median_weekly_cases_dt <- shifted_median_weekly_cases_dt[1:17]
+
+#plot
+figure_2 <- ggplot(shifted_median_weekly_cases_dt, aes(x = week, y= median_weekly_cases)) +
+  geom_line() + xlab("Week") + ylab("Median Weekly Daily Cases") 
+
+
+# create scatter plot
+dt <- merge(shifted_median_weekly_cases_dt,weekly_median_dt, by = "week")
+
+figure_3 <- ggplot(dt, aes(x= median_floating_population, y=median_weekly_cases)) + 
+  geom_point() + xlab("Median Weekly Population (in millions)") + 
+  ylab("Median Weekly Daily Cases")
+
+# Show plots
+figure_1
+figure_2
+figure_3
+
+#correlation
+cor.test(dt$median_weekly_cases,dt$median_floating_population, method = "spearman")
+
+```
+
+
+In the second claim we look into how much did the policies help reduce the new daily cases, by reducing the cases caused by oversees travel. We then compute the difference between the amount of oversees cases before the implementation of the immigration policies and after they were implemented and see if the difference was significant. 
+
+## Figure 4
+
+```{r echo= T, message = FALSE, fig.show= 'hide', warning= FALSE }
+patient$overseas <- ifelse(patient$infection_case == "overseas inflow",
+                           "overseas", "not_overseas")
+
+d1 <- patient[overseas == "overseas", .N, by="confirmed_date"]
+d2 <- patient[overseas == "not_overseas", .N, by="confirmed_date"]
+
+d1$case <- "overseas"
+d2$case <- "not_overseas"
+d3 <- rbind(d1,d2)
+
+d3$population <- pop[1,2]
+d3$cases_per_100k <- (d3$N/d3$population)*100000
+
+#Getting the dates when immigration policies were implemented:
+immigration_dates <- policy[type == "Immigration", c("start_date")]
+#14 days added as it takes some time until policies really start to take effect:
+#Start date + 14 days after 1st immigration policy was implemented
+start <- sort(immigration_dates$start_date)[1] + 14
+#Date + 14 days after last immigration policy was implemented
+end <- sort(immigration_dates$start_date)[15] + 14
+
+#Plotting the development of overseas and non overseas cases over time
+ggplot(d3, aes(confirmed_date, cases_per_100k, color=case)) + geom_line() +
+  geom_smooth() + geom_vline(xintercept = c(start, end), color="green") +
+  labs(title = "Overseas cases per 100.000 population declined after all 
+  immigration policies were implemented and stayed low",
+  x ="date when a covid case was confirmed")
+```
+
+## Figure 5
+
+```{r echo= T, message = FALSE, fig.show= 'hide', results = "hide" }
+#Testing hypothesis:
+#H0: immigration policies and overseas cases are not related
+#HA: immigration policies and overseas cases are related: 
+# after the implementation of policies, overseas cases decreased
+d4 <- copy(d3)
+d4 <- d4[confirmed_date >= start]
+d4[, imm_policy := ifelse(confirmed_date > end, "after", "during")]
+
+#Plotting the data
+ggplot(d4[case == "overseas"], aes(imm_policy, cases_per_100k)) + geom_boxplot() + 
+  labs(title = "Overseas cases per 100.000 significantly decreased after all 
+  immigration policies came into effect", 
+       x="immigration policies implementation dates", y="overseas cases per 100k")
+
+# Wilcoxon test
+wilcox.test(cases_per_100k ~ imm_policy, data=d4[case == "overseas"], alternative = "less")
+```
+
+
+In the third claim we ask the question: Did the policies manage to keep the spread between regions inside Korea. 
+We detect if the provinces influenced each other by calculating the correlation between any pair of regions. Then we investigate into the relation of this correlations to the distances of the province pairs.
+How close two regions are, is estimated using the travel distance of their capital cities.
+We assume that people are more likely to travel to closer regions more often than to ones that are further away.
+Thus, if two regions had a similar case development, we assume it was due to travel between the two regions.
+
+## Figure 6
+```{r echo= T, message = FALSE, fig.show= 'hide', results = "hide", warning=F}
+
+# Data loading and first preparations:
+# calculate new cases per day for each region, and add that as column
+J.cases[, new_cases_per_day := c(0,diff(confirmed)), by = province]
+ # calculate change in new cases per day for each region, and add that as column
+J.cases[, change_in_new_cases_per_day :=  c(0, diff(new_cases_per_day)), by = province]
+
+# scale to: per 100000 population
+J.cases <- merge(J.cases, J.pop)
+J.cases[, new_cases_per_day := new_cases_per_day * 100000 / population, by = province]
+J.cases[, change_in_new_cases_per_day :=  
+          change_in_new_cases_per_day * 100000 / population, by = province]
+
+#prepare a function to calculate the correlation table for a given period of time.
+
+tableForPeriode <- function(start, end = max(J.cases$date)){
+  # filter the daily new cases for the given period of time
+  data <- J.cases[start < date & date < end]
+  
+  # get rid of not needed columns
+  dataC <- data[, .(date, province, new_cases_per_day)]
+  # cast that each region has its own column. 
+  # Each row is one day, holding the new cases for each region
+  dataC2 <- dcast(dataC, ...~province, value.var = "new_cases_per_day", fun.aggregate = NULL)
+  
+  dataC3 <- dataC2[, date := NULL]
+  # calculate the correlation between all of the region columns.
+  # Each row now is a region and it holds all the correlations to all other regions in the columns.
+  # Each cell is the correlation for one pair of regions.
+  dataC4 <- cor(dataC3)
+  
+  # the columns hold region names, this are melted into a column.
+  dataC4.2 <- as.data.table(dataC4)[, cityA := rownames(dataC4)]
+  dataC5 <-melt(dataC4.2, id.vars = "cityA", variable.name = "cityB", 
+                value.name = "correlation_of_daily_new_cases_of_any_two_regions")
+  
+  # comparing the region with it self, has no point, so filter this rows out.
+  dataC6 <- dataC5[cityA != cityB] 
+  
+  # add the distances
+  
+  J.distances[, cityA:= V1] # renaming
+  J.distances[, V1:= NULL]
+  
+  J.distances.2 <- J.distances[cityA %in% capitals$V1,] # get rid of unused cities
+  # column names are cities, this need to be melt down.
+  J.distances.3 <- melt(
+    J.distances.2, id.vars = "cityA", variable.name = "cityB", value.name = "distance") 
+  J.distances.4 <- J.distances.3[cityB %in% capitals$V1,] # get rid of unused cities
+  
+  # merge to have the mapping for region to its capital city, 
+  # which we use as approximation for the distance between region. Here just for region one.
+  J.distances.5 <- merge(J.distances.4, capitals, by.y = "V1", by.x = "cityA") 
+  J.distances.5[, regionA:=V2] # renaming
+  J.distances.5[, V2:=NULL]
+  
+  # add mapping of region to capital city for region B
+  J.distances.6 <- merge(J.distances.5, capitals, by.y = "V1", by.x = "cityB") 
+  J.distances.6[, regionB:=V2]
+  J.distances.6[, V2:=NULL]
+  J.distances.7 <-J.distances.6[regionA != regionB,]
+  
+  # merge distance onto correlation table
+  join <- merge(dataC6, J.distances.7, 
+                by.x = c("cityA", "cityB"), by.y = c("regionA", "regionB"), all.x = TRUE)
+  
+  # only keep the relevant columns
+  join.2 <- join[, .(correlation_of_daily_new_cases_of_any_two_regions, distance)]
+  # get the distance entry into the right format
+  join.2[, distance:= as.numeric(gsub(",", ".", distance))] 
+  
+  join.2 # return
+}
+
+#use that function to calculate the correlation to distance table for the time period which 
+#starts when most of the policies are in place
+J.table <- tableForPeriode(as.Date("2020-04-27"))
+#And then plot the relation
+ggplot(J.table, aes(distance, correlation_of_daily_new_cases_of_any_two_regions)) +
+  geom_point(aes(alpha = 0.1)) + xlab('distance between two regions') + 
+  ylab('similarity between two regions') + stat_smooth(method = 'lm') +
+  theme(legend.position = "none")
+
+cor.test(J.table$correlation_of_daily_new_cases_of_any_two_regions, J.table$distance, 
+         method = "spearman")
+```
+
