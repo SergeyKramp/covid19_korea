@@ -1,7 +1,8 @@
 # covid19_korea
 This is an EDA of COVID-19 data from South Korea in 2020. 
 
-This was a final team project in university. The analysis and figures were generated with R and, in particular, ggplot2 and datatable
+This was a final team project in university. The analysis and figures were generated with R and, in particular, ggplot2 and datatable.
+
 We looked at COVID-19 data available on Kaggle (https://www.kaggle.com/code/mehmetbicici/south-korea-covid19-analysis/data)
 
 As part of the analysis we explored three aspects:
